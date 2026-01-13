@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import api from "../utils/api";
 
 export default function Reports() {
@@ -10,8 +10,11 @@ export default function Reports() {
   const [summary, setSummary] = useState({
     purchases: 0,
     quantity: "0 kg",
-    amount: "₹0",
+    amount: "0.00", // ₹ hata diya
   });
+
+  const [loading, setLoading] = useState(true);
+  const [hasData, setHasData] = useState(false);
 
   const timePeriods = [
     "Weekly",
@@ -21,7 +24,6 @@ export default function Reports() {
     "Yearly",
   ];
 
-  // 🔹 date range calculator (UI se koi relation nahi)
   const getDateRange = (type) => {
     const today = new Date();
     let from = new Date();
@@ -45,95 +47,115 @@ export default function Reports() {
     };
   };
 
-  // 🔹 report load function
-  const loadReport = async (selectedRange) => {
-    setRange(selectedRange);
+  const fetchReport = async () => {
+    if (!startDate || !endDate) return;
 
-    const { from, to } = getDateRange(selectedRange);
-    setStartDate(from);
-    setEndDate(to);
+    setLoading(true);
 
-    try {
-      const res = await api.get(
-        `/reports?from=${from}&to=${to}&category=${category}`
-      );
-
-      setSummary({
-        purchases: res.data?.purchases || 0,
-        quantity: `${res.data?.quantity || 0} kg`,
-        amount: `₹${res.data?.amount || 0}`,
-      });
-    } catch (error) {
-      console.error("Report error:", error);
-      setSummary({
-        purchases: 0,
-        quantity: "0 kg",
-        amount: "₹0",
-      });
-    }
-  };
-
- const fetchReportByFilters = async () => {
-   if (!startDate || !endDate) return;
-
-   try {
-     const res = await api.get(
-       `/reports?from=${startDate}&to=${endDate}&category=${category}`
-     );
-
-     setSummary({
-       purchases: res.data?.purchases || 0,
-       quantity: `${res.data?.quantity || 0} kg`,
-       amount: `₹${res.data?.amount || 0}`,
-     });
-   } catch (error) {
-     console.error("Report error:", error);
-     setSummary({
-       purchases: 0,
-       quantity: "0 kg",
-       amount: "₹0",
-     });
-   }
- };
- 
-
-  // 🔹 Export CSV (NO UI / STATE CHANGE)
-  const handleExportCSV = async () => {
     try {
       const res = await api.get(
         `/reports?from=${startDate}&to=${endDate}&category=${category}`
       );
 
-      const data = res.data?.records || [];
+      const data = res.data || {};
 
-      if (!data.length) {
-        alert("No data to export");
-        return;
+      const qty = Number(data.quantity || 0).toFixed(2) + " kg";
+
+      // Amount ko clean karo – ₹ ya koi garbage nahi
+      let rawAmount = data.amount || "0";
+
+      if (typeof rawAmount === "string") {
+        rawAmount = rawAmount
+          .replace(/[^0-9.-]/g, "") // sab non-number hata do
+          .replace(/,/g, ""); // comma bhi hatao
       }
 
-      const headers = Object.keys(data[0]);
-      const csvRows = [
-        headers.join(","),
-        ...data.map((row) =>
-          headers
-            .map(
-              (key) => `"${(row[key] ?? "").toString().replace(/"/g, '""')}"`
-            )
-            .join(",")
-        ),
-      ];
+      let amtValue = parseFloat(rawAmount) || 0;
+      if (isNaN(amtValue)) amtValue = 0;
 
-      const blob = new Blob([csvRows.join("\n")], {
-        type: "text/csv;charset=utf-8;",
+      // Sirf number format (₹ nahi)
+      const amt = amtValue.toLocaleString("en-IN", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+        useGrouping: true,
       });
 
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = `${category}_report.csv`;
-      link.click();
+      setSummary({
+        purchases: Number(data.purchases || 0),
+        quantity: qty,
+        amount: amt,
+      });
+
+      setHasData(
+        Number(data.purchases || 0) > 0 ||
+          Number(data.quantity || 0) > 0 ||
+          amtValue > 0
+      );
     } catch (err) {
-      console.error("Export error:", err);
+      console.error("Failed to fetch report:", err);
+      setSummary({
+        purchases: 0,
+        quantity: "0 kg",
+        amount: "0.00",
+      });
+      setHasData(false);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const handlePeriodChange = (period) => {
+    setRange(period);
+    const { from, to } = getDateRange(period);
+    setStartDate(from);
+    setEndDate(to);
+  };
+
+  useEffect(() => {
+    if (startDate && endDate) {
+      fetchReport();
+    }
+  }, [startDate, endDate, category]);
+
+  useEffect(() => {
+    handlePeriodChange("monthly");
+  }, []);
+
+  const handleExportCSV = () => {
+    if (!hasData) {
+      alert("No data to export");
+      return;
+    }
+
+    const headers = ["Metric", "Value"];
+    const rows = [
+      ["Purchases", summary.purchases],
+      ["Quantity", summary.quantity],
+      ["Amount", summary.amount], // ab ₹ nahi, sirf number
+    ];
+
+    const BOM = "\uFEFF";
+    let csv = BOM + headers.join(",") + "\n";
+
+    rows.forEach((row) => {
+      const escapedRow = row.map((cell) => {
+        if (cell === null || cell === undefined) return "";
+        return `"${cell.toString().replace(/"/g, '""')}"`;
+      });
+      csv += escapedRow.join(",") + "\n";
+    });
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute(
+      "download",
+      `purchase_report_${startDate}_to_${endDate}.csv`
+    );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
@@ -160,7 +182,8 @@ export default function Reports() {
         </div>
         <button
           onClick={handleExportCSV}
-          className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-blue-800 transition flex items-center gap-2"
+          className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-blue-800 transition flex items-center gap-2 disabled:opacity-50"
+          disabled={loading || !hasData}
         >
           <svg
             className="w-5 h-5"
@@ -200,7 +223,7 @@ export default function Reports() {
               {timePeriods.map((period) => (
                 <button
                   key={period}
-                  onClick={() => loadReport(period.toLowerCase())}
+                  onClick={() => handlePeriodChange(period.toLowerCase())}
                   className={`px-3 py-1 rounded-full text-sm font-medium transition ${
                     range === period.toLowerCase()
                       ? "bg-primary text-white"
@@ -221,10 +244,7 @@ export default function Reports() {
             <input
               type="date"
               value={startDate}
-              onChange={(e) => {
-                setStartDate(e.target.value);
-                setTimeout(fetchReportByFilters, 0);
-              }}
+              onChange={(e) => setStartDate(e.target.value)}
               className="w-full p-2 border rounded-lg"
             />
           </div>
@@ -237,10 +257,7 @@ export default function Reports() {
             <input
               type="date"
               value={endDate}
-              onChange={(e) => {
-                setEndDate(e.target.value);
-                setTimeout(fetchReportByFilters, 0);
-              }}
+              onChange={(e) => setEndDate(e.target.value)}
               className="w-full p-2 border rounded-lg"
             />
           </div>
@@ -252,10 +269,7 @@ export default function Reports() {
             </label>
             <select
               value={category}
-              onChange={(e) => {
-                setCategory(e.target.value);
-                setTimeout(fetchReportByFilters, 0);
-              }}
+              onChange={(e) => setCategory(e.target.value)}
               className="w-full p-2 border rounded-lg"
             >
               <option value="all">All Categories</option>
@@ -271,28 +285,59 @@ export default function Reports() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-xl shadow p-6 text-center">
           <h3 className="text-lg font-semibold mb-2">Purchases</h3>
-          <p className="text-3xl font-bold text-primary">{summary.purchases}</p>
+          {loading ? (
+            <p className="text-3xl font-bold text-gray-400">...</p>
+          ) : (
+            <p className="text-3xl font-bold text-primary">
+              {summary.purchases}
+            </p>
+          )}
         </div>
 
         <div className="bg-white rounded-xl shadow p-6 text-center">
           <h3 className="text-lg font-semibold mb-2">Quantity</h3>
-          <p className="text-3xl font-bold text-primary">{summary.quantity}</p>
+          {loading ? (
+            <p className="text-3xl font-bold text-gray-400">...</p>
+          ) : (
+            <p className="text-3xl font-bold text-primary">
+              {summary.quantity}
+            </p>
+          )}
         </div>
 
         <div className="bg-white rounded-xl shadow p-6 text-center">
           <h3 className="text-lg font-semibold mb-2">Amount</h3>
-          <p className="text-3xl font-bold text-primary">{summary.amount}</p>
+          {loading ? (
+            <p className="text-3xl font-bold text-gray-400">...</p>
+          ) : (
+            <p className="text-3xl font-bold text-primary">{summary.amount}</p>
+          )}
         </div>
       </div>
 
-      {/* No Data */}
+      {/* No Data / Data Message */}
       <div className="bg-white rounded-xl shadow p-8 text-center">
-        <h3 className="text-xl font-semibold text-gray-800 mb-2">
-          No data available
-        </h3>
-        <p className="text-gray-600">
-          No purchases found for the selected filters
-        </p>
+        {loading ? (
+          <p className="text-gray-600 text-lg">Loading report...</p>
+        ) : hasData ? (
+          <>
+            <h3 className="text-xl font-semibold text-green-700 mb-2">
+              ✓ Data Found
+            </h3>
+            <p className="text-gray-600">
+              Purchases found for selected period and category.
+            </p>
+          </>
+        ) : (
+          <>
+            <h3 className="text-xl font-semibold text-gray-800 mb-2">
+              No data available
+            </h3>
+            <p className="text-gray-600">
+              No purchases found for the selected filters
+            </p>
+          </>
+        )}
       </div>
     </div>
   );
