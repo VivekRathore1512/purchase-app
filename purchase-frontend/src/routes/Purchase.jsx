@@ -189,7 +189,7 @@ export default function Purchase() {
       alert(err.response?.data?.message || "Failed to save purchase");
     }
   };
-
+ 
   if (loading)
     return (
       <div className="text-center py-10 text-gray-600">Loading form...</div>
