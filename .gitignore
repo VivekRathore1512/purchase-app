@@ -17,7 +17,6 @@ build/
 # Database sensitive dumps
 *.sql.bak
 full_dump.sql
-purchase_db*.sql
 
 # Only allow clean schema & seeds
 !database/schema/*.sql
